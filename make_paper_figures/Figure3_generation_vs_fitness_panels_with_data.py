@@ -9,6 +9,8 @@ from helper_functions.automatic_plot_helper import calc_normalized_fitness
 from helper_functions.automatic_plot_helper import load_isings_from_list
 import numpy as np
 
+from Figure4_dynamical_range_parameter_fitness_coloring_with_data import OneSimPlotData
+
 import matplotlib.pyplot as plt
 import os
 import pickle
@@ -17,6 +19,7 @@ from scipy.interpolate import interp1d
 from matplotlib.lines import Line2D
 import time
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.collections import LineCollection
 
 
 def main_plot_parallel_sims(folder_name, plot_settings):
@@ -44,6 +47,7 @@ def main_plot_parallel_sims(folder_name, plot_settings):
         save_plot_data(folder_name, attrs_lists, plot_settings)
     else:
         attrs_lists = load_plot_data(folder_name, plot_settings)
+
     plot(attrs_lists, plot_settings)
 
 
@@ -78,30 +82,69 @@ def load_plot_data(folder_name, plot_settings):
             file = open(save_dir+save_name, 'rb')
             attrs_lists = pickle.load(file)
             file.close()
+
+    # try to load the delta data from Figure 4 if it exists.
+    # try:
+    #     delta_save_name = 'plot_dynamic_range_param_data_with_fitness_last_gen.pickle'
+    #     file = open(save_dir+delta_save_name, 'rb')
+    #     delta_attrs_list = pickle.load(file)
+    #     file.close()
+    # except FileNotFoundError:
+    #     print('No Delta savefile. Generate Figure 4 to create plot data for colourmap.')
+    #     delta_attrs_list = []
+
     return attrs_lists
 
 
-
 def plot(attrs_lists, plot_settings):
-    plt.figure(figsize=(10, 7))
+    # plt.figure(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(10, 7))
     plt.grid()
+
     # colors = sns.color_palette("dark", len(attrs_lists))
     cmap = LinearSegmentedColormap.from_list('my_cmap', plot_settings['color_list'])
+
+    # if delta data exists, use it to colour the segmented lines
+    # if len(delta_attrs_list) > 0:
+    #     delta_dicts = [D.delta_dict for D in delta_attrs_list]
+    #     delta_gens = [ [int(k) for k in list(D.keys())] for D in delta_dicts]
+    #     deltas = [ [v for v in list(D.values())] for D in delta_dicts]
+    #     dmin = np.min(deltas)
+    #     dmax= np.max(deltas)
+    #     normed_deltas = [(d - dmin) / (dmax - dmin) for d in deltas]
+    #     # colors = [cmap(nd) for nd in normed_deltas]
+    #     colors = normed_deltas
+    # else:
     color_norm_getters = np.linspace(0, 1, len(attrs_lists))
     colors = [cmap(color_norm_getter) for color_norm_getter in color_norm_getters]
     if not plot_settings['fitness_2']:
         colors.reverse()
 
 
-    for attrs_list, color in zip(attrs_lists, colors):
+    for isim, (attrs_list, color) in enumerate(zip(attrs_lists, colors)):
         generations = np.arange(len(attrs_list))
-        mean_attrs_list = [np.nanmean(gen_attrs) for gen_attrs in attrs_list]
+        highscore_list = [np.max(attrs_gen) for attrs_gen in attrs_list]
+        # mean_attrs_lilst = [np.nanmean(gen_attrs) for gen_attrs in attrs_list]
+        plot_attrs_list = highscore_list
+
+        if plot_settings['attr'] == 'norm_avg_energy':
+            plot_attrs_list = [2000* f for f in plot_attrs_list]
+
+        # if len(delta_attrs_list) > 0:
+        #     delta_colors = []
+        #     color_idx = 0
+        #     for g in generations:
+        #         if g > delta_gens[isim][color_idx]:
+        #             color_idx += 1
+        #         delta_colors.append(color[color_idx])
+
+
         # removed scatters
-        # plt.scatter(generations, mean_attrs_list, s=2, alpha=0.05, c=color) #alpha = .15git commit -a -m "
+        # plt.scatter(generations, mean_attrs_list, s=2, alpha=0.05, c=color) #alpha = .15
         if plot_settings['sliding_window']:
-            slided_mean_attrs_list, slided_x_axis = slide_window(mean_attrs_list, plot_settings['sliding_window_size'])
+            slided_plot_attrs_list, slided_x_axis = slide_window(plot_attrs_list, plot_settings['sliding_window_size'])
             # plt.plot(slided_x_axis, slided_mean_attrs_list, alpha=0.8, linewidth=2, c=color)
-            plt.plot(slided_x_axis, slided_mean_attrs_list, alpha=1, linewidth=2, c=color)
+            plt.plot(slided_x_axis, slided_plot_attrs_list, alpha=1, linewidth=2, c=color)
         if plot_settings['smooth']:
             '''
             Trying to make some sort of regression, that smoothes and interpolates 
@@ -109,14 +152,29 @@ def plot(attrs_lists, plot_settings):
             '''
             # smoothed_mean_attrs_list = gaussian_kernel_smoothing(mean_attrs_list)
             # Savitzky-Golay filter:
-            smoothed_mean_attrs_list = savgol_filter(mean_attrs_list, 201, 3) # window size, polynomial order
+            smoothed_plot_attrs_list = savgol_filter(plot_attrs_list, plot_settings['savegol_window'], 3) # window size, polynomial order
             # plt.plot(generations, smoothed_mean_attrs_list, c=color)
 
-            # Uncommand the following, if interpolation shall be applied to smoothed data
-            f_interpolate = interp1d(generations, smoothed_mean_attrs_list, kind='cubic')
-            x_interp = np.linspace(np.min(generations), np.max(generations), num=4000, endpoint=True)
-            y_interp = f_interpolate(x_interp)
-            plt.plot(x_interp, y_interp, c=color, alpha=0.8, linewidth=2)
+            if plot_settings['interpolate']:
+                # Uncommand the following, if interpolation shall be applied to smoothed data
+                f_interpolate = interp1d(generations, smoothed_plot_attrs_list, kind='cubic')
+                x_interp = np.linspace(np.min(generations), np.max(generations), num=4000, endpoint=True)
+                y_interp = f_interpolate(x_interp)
+
+                # if len(delta_attrs_list) > 0:
+                #     xy = np.stack([x_interp, y_interp], axis=1)
+                #     xy = xy.reshape(-1, 1, 2)
+                #     segments = np.hstack([xy[:-1], xy[1:]])
+                #     line_segments = LineCollection(segments, cmap='Spectral')
+                #     line_segments.set_array(np.array(delta_colors))
+                #     ax.add_collection(line_segments)
+                #     ax.autoscale_view()
+                # else:
+                plt.plot(x_interp, y_interp, c=color, alpha=0.8, linewidth=2)
+            else:
+                plt.plot(generations, smoothed_plot_attrs_list, c=color, alpha=0.8, linewidth=2)
+        else:
+            plt.plot(generations, plot_attrs_list, '.', alpha=0.5)
 
         # plt.scatter(generations, mean_attrs_list, s=20, alpha=1)
     if plot_settings['fitness_2']:
@@ -126,7 +184,7 @@ def plot(attrs_lists, plot_settings):
     # plt.ylabel(plot_settings['attr'])
     if not plot_settings['remove_y_ticks']:
         plt.ylabel(r'Fitness, $\langle E \rangle$')
-    plt.ylim(plot_settings['ylim'])
+    # plt.ylim(plot_settings['ylim'])
     if plot_settings['legend']:
         create_legend()
 
@@ -152,7 +210,7 @@ def plot(attrs_lists, plot_settings):
 
 
     # save_dir = 'save/{}/figs/several_plots{}/'.format(folder_name, plot_settings['add_save_name'])
-    save_dir = 'save/{}/figs/several_plots{}/'.format(plot_settings['savefolder_name'], plot_settings['add_save_name'])
+    save_dir = 'save/{}/figs/several_plots{}/'.format(plot_settings['folder_name'], plot_settings['add_save_name'])
     # save_name = 'several_sims_criticial_{}{}_{}_min_ts{}_min_food{}_{}.png'. \
     #     format(plot_settings['attr'], plot_settings['only_copied_str'], plot_settings['folder_name'],
     #            plot_settings['min_ts_for_plot'], plot_settings['min_food_for_plot'],
@@ -196,9 +254,11 @@ def load_attrs(folder_name, plot_settings):
         if plot_settings['only_plot_certain_generations']:
             load_generations = np.arange(plot_settings['lowest_and_highest_generations_to_be_plotted'][0],
                                          plot_settings['lowest_and_highest_generations_to_be_plotted'][1]+1)
-            isings_list = load_isings_from_list(sim_name, load_generations, decompress=plot_settings['decompress'])
+            isings_list = load_isings_from_list(sim_name, load_generations, decompress=plot_settings['decompress'],
+                                                verbose=False)
         else:
-            isings_list = load_isings_specific_path('{}/isings'.format(dir), decompress=plot_settings['decompress'])
+            isings_list = load_isings_specific_path('{}/isings'.format(dir), decompress=plot_settings['decompress'],
+                                                    verbose=False)
 
         if plot_settings['only_copied']:
             isings_list = [choose_copied_isings(isings) for isings in isings_list]
@@ -256,10 +316,11 @@ if __name__ == '__main__':
     plot_settings = {}
     # Only plot loads previously saved plotting file instead of loading all simulations to save time
     plot_settings['only_plot'] = True
-    plot_settings['decompress'] = False
+    plot_settings['decompress'] = True
 
-    plot_settings['add_save_name'] = 'PAPER'
-    plot_settings['attr'] = 'avg_energy' #'norm_food_and_ts_avg_energy' #'norm_avg_energy'
+    plot_settings['add_save_name'] = ''
+    # plot_settings['attr'] = 'avg_energy' #'norm_food_and_ts_avg_energy' #'norm_avg_energy'
+    plot_settings['attr'] = 'norm_avg_energy'  # 'norm_food_and_ts_avg_energy' #'norm_avg_energy'
     # plot_settings['only_plot_fittest']
     # if plot_settings['attr'] == 'norm_food_and_ts_avg_energy':
     #     plot_settings['ylim'] = (-0.0001, 0.00025)
@@ -268,10 +329,14 @@ if __name__ == '__main__':
 
     # plot_settings['ylim'] = (-0.000001, 0.00007)
 
-    # This only plots individuals that have not been mutated in previous generation (thus were fittest in previous generation)
+    # This only plots individuals that have not been mutated in previous generation (thus were lfittest in previous generation)
     plot_settings['only_copied'] = True
     plot_settings['sliding_window'] = False
+    ##### savgol smoothing ####
     plot_settings['smooth'] = True
+    plot_settings['savegol_window'] = 201 # odd number
+    plot_settings['interpolate'] = False # used only with smoothing
+    #############################
     plot_settings['sliding_window_size'] = 100
 
     # ONLY PLOT HAS TO BE FALSE FOR FOLLOWING SETTINGS to work:
@@ -290,31 +355,19 @@ if __name__ == '__main__':
                                    'lgreen': '#b6d25cff', 'igreen': '#8fb032ff', 'sgreen': '#5e7320ff',
                                    'lred': '#f2977aff', 'ired': '#eb6235ff', 'sred': '#c03e13ff'}
 
+    ########################################
+    ###          FOLDER NAME             ###
+    folder_names = ['sim-20211206-201341_parallel_simpletask_NES_random_time']
+    ########################################
+    ########################################
 
-
-    # folder_names = ['sim-20201022-190625_parallel_b1_rand_seas_g4000_t2000', 'sim-20201022-190615_parallel_b10_normal_seas_g4000_t2000', 'sim-20201022-190605_parallel_b1_rand_seas_g4000_t2000', 'sim-20201022-190553_parallel_b1_normal_seas_g4000_t2000'] #
-    # folder_names = ['sim-20201019-154142_parallel_parallel_mean_4000_ts_b1_rand_ts', 'sim-20201019-154106_parallel_parallel_mean_4000_ts_b1_fixed_ts', 'sim-20201019-153950_parallel_parallel_mean_4000_ts_b10_fixed_ts', 'sim-20201019-153921_parallel_parallel_mean_4000_ts_b10_rand_ts']
-    # folder_names = ['sim-20201022-190625_parallel_b1_rand_seas_g4000_t2000', 'sim-20201022-190615_parallel_b10_normal_seas_g4000_t2000', 'sim-20201022-190553_parallel_b1_normal_seas_g4000_t2000']
-    # folder_names = ['sim-20201026-224639_parallel_b1_fixed_4000ts_', 'sim-20201026-224655_parallel_b1_random_100-7900ts_', 'sim-20201026-224709_parallel_b10_fixed_4000ts_', 'sim-20201026-224722_parallel_b10_random_100-7900ts_', 'sim-20201026-224748_parallel_b1_fixed_POWER_ts', 'sim-20201026-224817_parallel_b10_fixed_POWER_ts', 'sim-20201028-185409_parallel_b1_rand_seas_g4000_t2000_lim_1_499', 'sim-20201028-185436_parallel_b10_rand_seas_g4000_t2000_lim_1_499', 'sim-20201102-220107_parallel_b1_rand_seas_g4000_t2000_fixed_250_foods', 'sim-20201102-220135_parallel_b10_rand_seas_g4000_t2000_fixed_250_foods', 'sim-20201105-202455_parallel_b1_random_ts_2000_lim_100_3900', 'sim-20201022-190553_parallel_b1_normal_seas_g4000_t2000', 'sim-20201022-190625_parallel_b1_rand_seas_g4000_t2000', 'sim-20201023-191408_parallel_b10_rand_seas_g4000_t2000']
-    # folder_names = ['sim-20201105-202517_parallel_b10_random_ts_2000_lim_100_3900', 'sim-20201022-190615_parallel_b10_normal_seas_g4000_t2000']
-    # folder_names = ['sim-20201210-200605_parallel_b1_dynamic_range_c_20_g4000_t2000_10_sims_HEL_ONLY_PLOT', 'sim-20201210-200613_parallel_b10_dynamic_range_c_20_g4000_t2000_10_sims_HEL_ONLY_PLOT', 'sim-20201211-211021_parallel_b0_1_dynamic_range_c_20_g4000_t2000_10_sims_HEL_ONLY_PLOT'] # sim-20201202-021347_parallel_b1_break_eat_v_eat_max_05_g4000_t2000_20_sims
-    # folder_names = ['sim-20201210-200605_parallel_b1_dynamic_range_c_20_g4000_t2000_10_sims', 'sim-20201210-200613_parallel_b10_dynamic_range_c_20_g4000_t2000_10_sims', 'sim-20201211-211021_parallel_b0_1_dynamic_range_c_20_g4000_t2000_10_sims']
-    # folder_names = ['sim-20201023-202855_parallel_b1_num_neurons20_g4000_t2000', 'sim-20201023-202920_parallel_b1_num_neurons28_g4000_t2000', 'sim-20201023-202932_parallel_b10_num_neurons20_g4000_t2000', 'sim-20201023-202949_parallel_b10_num_neurons28_g4000_t2000']
-    # folder_names = ['different_neurons_runs/sim-20201022-190553_parallel_b1_normal_seas_g4000_t2000_HEL_ONLY_PLOT', 'different_neurons_runs/sim-20201022-190615_parallel_b10_normal_seas_g4000_t2000_HEL_ONLY_PLOT']
-    # folder_names = ['var_neurons_sim-20201022-190553_parallel_b1_normal_seas_g4000_t2000_HEL_ONLY_PLOT', 'var_neurons_sim-20201022-190615_parallel_b10_normal_seas_g4000_t2000_HEL_ONLY_PLOT', 'var_neurons_sim-20201023-202855_parallel_b1_num_neurons20_g4000_t2000_HEL_ONLY_PLOT', 'var_neurons_sim-20201023-202920_parallel_b1_num_neurons28_g4000_t2000_HEL_ONLY_PLOT', 'var_neurons_sim-20201023-202932_parallel_b10_num_neurons20_g4000_t2000_HEL_ONLY_PLOT', 'var_neurons_sim-20201023-202949_parallel_b10_num_neurons28_g4000_t2000_HEL_ONLY_PLOT']
-    folder_names = ['sim-20201210-200605_parallel_b1_dynamic_range_c_20_g4000_t2000_10_sims_HEL_ONLY_PLOT',
-                    'sim-20201210-200613_parallel_b10_dynamic_range_c_20_g4000_t2000_10_sims_HEL_ONLY_PLOT',
-                    'var_neurons_sim-20201023-202920_parallel_b1_num_neurons28_g4000_t2000_HEL_ONLY_PLOT',
-                    'var_neurons_sim-20201023-202949_parallel_b10_num_neurons28_g4000_t2000_HEL_ONLY_PLOT',
-                    'break_eat_sim-20201226-111318_parallel_b1_break_eat_v_eat_max_0_005_g4000_t2000_10_sims_HEL_ONLY_PLOT',
-                    'break_eat_sim-20201226-111308_parallel_b10_break_eat_v_eat_max_0_005_g4000_t2000_10_sims_HEL_ONLY_PLOT']
-    remove_x_ticks_list = [True, False, True, False, True, False]
-    remove_y_ticks_list = [False, False, True, True, False, False]
-    plot_legend_list = [False, False, False, False, False, False]
-    save_fig_add_list = ['1', '2', '3', '4', '5', '6']
-    base_colors = ['igreen', 'iblue', 'igreen', 'iblue', 'igreen', 'iblue']
-    fitness_2_list = [False, True, False, True, False, True]
-    ylims = [(-1, 40), (-1, 40), (-1, 40), (-1, 40), (-0.25, 10), (-0.25, 10)]
+    remove_x_ticks_list = [False]
+    remove_y_ticks_list = [False]
+    plot_legend_list = [False]
+    save_fig_add_list = ['1']
+    base_colors = ['igreen']
+    fitness_2_list = [False]
+    ylims = [(-1, 40)]
     for i, (folder_name, remove_x_ticks, remove_y_ticks, plot_legend, save_fig_add, base_color, ylim, fitness_2) in\
             enumerate(zip(folder_names, remove_x_ticks_list, remove_y_ticks_list, plot_legend_list, save_fig_add_list, base_colors, ylims, fitness_2_list)):
         plot_settings['folder_name'] = folder_name

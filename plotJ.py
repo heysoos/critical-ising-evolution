@@ -138,7 +138,7 @@ def plot(data_dict, plot_settings):
 
 
 if __name__ == '__main__':
-    folder_name = 'sim-20211123-152610_parallel_hardtask_original'
+    folder_name = 'NES_mutation_rate_experiments'
 
     plot_settings = {}
     # empty list plots all generations, otherwise in the format of np.arange(min, max, step)

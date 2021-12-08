@@ -1,8 +1,12 @@
 from helper_functions.automatic_plot_helper import detect_all_isings
 from helper_functions.automatic_plot_helper import list_to_blank_seperated_str
 from helper_functions.automatic_plot_helper import load_settings
+from helper_functions.automatic_plot_helper import all_sim_names_in_parallel_folder
 import visualize_heat_capacity_generational_automatic
+
+from compute_heatcapacity_generational_recorded_function import save_compute_heat_capacity
 import os
+import numpy as np
 
 def main(sim_name, settings, generations = None, recorded = False, add_subfolder_to_sim_name=True):
     if add_subfolder_to_sim_name:
@@ -14,13 +18,19 @@ def main(sim_name, settings, generations = None, recorded = False, add_subfolder
     compute_plot_heat_capacity(sim_name, generations, cores, settings, recorded)
 
 def compute_plot_heat_capacity(sim_name, generation_list, cores, settings, recorded):
-    gens_str = list_to_blank_seperated_str(generation_list)
+    # gens_str = list_to_blank_seperated_str(generation_list)
     R, thermal_time, beta_low, beta_high, beta_num, y_lim_high = settings['heat_capacity_props']
     if recorded:
-        os.system('bash bash-heat-capacity-generational-automatic-recorded.sh {} "{}" {} {}'
-                  .format(sim_name, gens_str, cores, beta_num-1))
+        # os.system('bash bash-heat-capacity-generational-automatic-recorded.sh {} "{}" {} {}'
+        #           .format(sim_name, gens_str, cores, beta_num-1))
+
+        for gen_str in generation_list:
+            for i in range(beta_num):
+                save_compute_heat_capacity(sim_name, i, gen_str)
+
     else:
-        os.system('bash bash-heat-capacity-generational-automatic.sh {} "{}" {}'.format(sim_name, gens_str, cores))
+        print('Sina says: Bad heat capacity settings!!')
+        # os.system('bash bash-heat-capacity-generational-automatic.sh {} "{}" {}'.format(sim_name, gens_str, cores))
     if settings['plot_heat_cap']:
         visualize_heat_capacity_generational_automatic.main(sim_name, settings, None, recorded)
     #visualize_heat_capacity_generational_automatic_recorded.main(sim_name, settings, None, recorded)
@@ -34,10 +44,14 @@ if __name__ == '__main__':
     #              'sim-20200606-014815-g_2000_-t_4000_-b_1_-dream_c_0_-nat_c_0_-ref_0_-rec_c_0_-noplt_-n_energies_velocities_saved_more_time_steps',
     #              'sim-20200606-014837-g_2000_-t_4000_-b_10_-dream_c_0_-nat_c_0_-ref_0_-rec_c_0_-noplt_-n_energies_velocities_saved_more_time_steps'
     #              ]
-    sim_names = ['sim-20200721-184149-g_4000_-t_2000_-iso_-ref_500_-rec_c_250_-a_50_100_500_1000_-no_trace_-n_different_nbetas_from_scratch_isolated_no_beta_jump_GOOD']
+    # sim_names = ['sim-20211020-165202_parallel_beta_linspace_rec_c250_5_sims']
+    folder_name = 'sim-20211020-165202_parallel_beta_linspace_rec_c250_5_sims'
+    sim_names = all_sim_names_in_parallel_folder(folder_name)
+    folder_name = 'sim-20211026-155738_parallel_beta_linspace_rec_c250_20_sims_hardtask'
+    sim_names = sim_names + all_sim_names_in_parallel_folder(folder_name)
     for sim_name in sim_names:
-        cores = 20
-        generation_list = [3750]
+        cores = 15
+        generation_list = np.arange(0, 4000, 250) #[0]
         settings = load_settings(sim_name)
         compute_plot_heat_capacity(sim_name, generation_list, cores, settings, recorded=True)
 

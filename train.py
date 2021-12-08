@@ -11,7 +11,11 @@ import time
 from helper_functions.automatic_plot_helper import load_settings
 from helper_functions.automatic_plot_helper import decompress_pickle
 
+from numba import jit
 
+@jit(nopython=True)
+def set_seed(seed):
+    np.random.seed(seed)
 
 def create_settings():
 
@@ -28,6 +32,7 @@ def create_settings():
     settings['org_radius'] = 0.05
     settings['ANN'] = False  # Use ANN or Ising?
     settings['BoidOn'] = False  # Only use Boid model? #True
+    settings['random_seed'] = args.random_seed
 
     settings['server_mode'] = args.server_mode
     settings['laptop_mode'] = args.laptop_mode
@@ -56,6 +61,11 @@ def create_settings():
 
     settings['evolution_toggle'] = False  # only toggles for CriticalLearning
     settings['evolution_rate'] = 1  # only with critical learning number of iterations to skip to kill/mate (gives more time to eat before evolution)
+    settings['NES'] = args.NES
+    settings['NES_elitism'] = args.NES_elitism
+    settings['NES_mutation_rate'] = args.NES_mutation_rate
+    settings['NES_anneal'] = args.NES_anneal
+    settings['NES_clip'] = args.NES_clip
     
     settings['dt'] = 0.2  # kinetic time step      (dt)
     settings['r_max'] = 720
@@ -100,7 +110,6 @@ def create_settings():
     settings['change_beta_loaded_simulation'] = args.change_beta_loaded_simulation
     settings['beta_linspace_within_sim'] = args.beta_linspace_within_sim
 
-    #settings['loadfile'] = sim-20191114-000009_server
     settings['loadfile'] = args.loadfile
     settings['iter'] = args.loaditer
     if settings['loadfile'] is '':
@@ -134,6 +143,9 @@ def create_settings():
     settings['dream_heat_capacity'] = args.dream_heat_capacity
     settings['recorded_heat_capacity'] = args.recorded_heat_capacity
     settings['minimal_energy_initializatin_heat_cap'] = args.minimal_energy_initializatin_heat_cap
+    settings['anneal'] = args.anneal
+    if settings['minimal_energy_initializatin_heat_cap'] == True:
+        settings['anneal'] = None
 
     settings['heat_capacity_props'] = args.heat_capacity_props
     settings['plot_heat_cap'] = args.plot_heat_cap
@@ -313,9 +325,7 @@ def parse():
                         Every nth generation that recorded heat capacity is calculated and plotted. 
                         If 0 dream heat capacity is never calculated and plotted. In the recorded heat capacity sensor 
                         input values are recorded during the simulation and subsequently used to calculate heat cap.''')
-    parser.add_argument('-no_min_init', dest='minimal_energy_initializatin_heat_cap', action='store_false',
-                        help='Deactivates brute force minimal energy initialization in recorded heat capacity. Deactivating'
-                             'this leads to outliers in the heat capacity plots')
+
     parser.add_argument('-c_props', dest='heat_capacity_props', type=int, nargs='+', help='''Properties of dream and recorded heat 
                         capacity calculation. As blank spaced integer list: R, thermal_time, beta_low, beta_high, num_betas, y_lim_high 
                         R = number of repititions (with newly initialized sensor values) thermal_time = number of thermal iterations used
@@ -372,6 +382,27 @@ def parse():
                                                                                                    '-n (name of simualtion) '
                                                                                                    'are not saved in folder name')
 
+    parser.add_argument('-anneal', dest='anneal', nargs='+', required=False,
+                        help='Blank seperated list: exp_beta_min_anneal exp_beta_max_anneal n_internal_anneal : '
+                             'Simulated annealing to find energy minima prior to heat '
+                             'capacity calculations. Overall minimum state during annealing is taken for initialization')
+    parser.add_argument('-min_init', dest='minimal_energy_initializatin_heat_cap', action='store_true',
+                        help='Activates brute force minimal energy initialization in recorded heat capacity. Deactivating'
+                             'this leads to outliers in the heat capacity plots')
+
+
+    parser.add_argument('-NES', dest='NES', action='store_true', help='Natural Evolution Strategy toggle')
+    parser.add_argument('-NES_elitism', dest='NES_elitism', action='store_true', help='Enable elitism for the NES')
+    parser.add_argument('-NES_mutation_rate', dest='NES_mutation_rate', type=float,
+                        help='Mutation rate when generating the NESs gaussian noise. '
+                             '1 means all vector compnents recieve noise, 0 means all vector components are zero.')
+    parser.add_argument('-NES_anneal', dest='NES_anneal', action='store_true', help='Enable annealing learning rate/sigma for the NES')
+    parser.add_argument('-NES_clip', dest='NES_clip',
+                        nargs='+',
+                        type=int, help='''Toggle clip with tuple of (min_value, max_value)''')
+    parser.add_argument('-seed', dest='random_seed', type=int,
+                        help='set the random seed of the simulation')
+
 
     #-n does not do anything in the code as input arguments already define name of folder. Practical nonetheless.
 
@@ -390,7 +421,9 @@ def parse():
                         save_energies_velocities_gens=None, save_energies_velocities_last_gen=True, random_time_steps_power_law=False,
                         random_time_steps_power_law_limits=[100, 1000000, 700], num_neurons=12, compress_save_isings= False, max_speed_eat=None,
                         beta_linspace=None, change_beta_loaded_simulation=None, commands_in_folder_name=True, plot_heat_cap=False,
-                        minimal_energy_initializatin_heat_cap=True, beta_linspace_within_sim=False)
+                        minimal_energy_initializatin_heat_cap=False, anneal=[-2, 2, 1000], beta_linspace_within_sim=False,
+                        NES=False, NES_elitism=False, NES_mutation_rate=1., NES_anneal=False, NES_clip=None,
+                        random_seed=None)
     args = parser.parse_args()
     return args
 
@@ -409,6 +442,11 @@ def run(settings, Iterations):
     # This adds 13 MB to settings.pickle and we don't need it
     # settings['Cdist'] = np.load(filename2)
 
+    if settings['random_seed'] is not None:
+        np.random.seed(settings['random_seed'])
+        set_seed(settings['random_seed'])
+        print(f"random seed: {settings['random_seed']}")
+
     # --- POPULATE THE ENVIRONMENT WITH FOOD ---------------+
     foods = []
     for i in range(0, settings['food_num']):
@@ -419,6 +457,8 @@ def run(settings, Iterations):
 
     if settings['beta_linspace'] is not None:
         settings['init_beta'] = beta_linspace(settings)
+        if settings['NES']:
+            settings['init_beta'] = np.log10(settings['init_beta'])
 
     # --- POPULATE THE ENVIRONMENT WITH ORGANISMS ----------+
     try:
@@ -520,6 +560,7 @@ def beta_linspace_within_sim(isings, settings):
 if __name__ == '__main__':
     settings, Iterations = create_settings()
     t1 = time.time()
+
     sim_name = run(settings, Iterations)
     t2 = time.time()
     print('total time:', t2-t1)

@@ -5,6 +5,7 @@ from helper_functions.automatic_plot_helper import detect_all_isings
 from helper_functions.automatic_plot_helper import load_isings_from_list
 from helper_functions.automatic_plot_helper import choose_copied_isings
 from helper_functions.heat_capacity_parameter import calc_heat_cap_param_main
+from helper_functions.heat_capacity_parameter import remove_outliers_mean_std_quantiles
 from scipy.interpolate import interp1d
 import numpy as np
 # from statsmodels.nonparametric.kernel_regression import KernelReg
@@ -116,6 +117,7 @@ def plot(sim_plot_data_list, plot_settings):
     # cmap = LinearSegmentedColormap.from_list('our_cmap', [plot_settings['our_colors']['our_violet'], plot_settings['our_colors']['our_orange'], '#ffb871ff'])
     # cmap = shiftedColorMap(cmap, 0, 0.5, 0.7)
     # norm = colors_package.Normalize(vmin=min(fitnesses), vmax=max(fitnesses))
+
     norm = colors_package.Normalize(vmin=1.9, vmax=max(fitnesses))
 
     # cmap, norm = colormap_according_to_delta(delta_dicts_all_sims, plot_settings['color_according_to_delta_in_generation'],
@@ -236,7 +238,7 @@ def plot(sim_plot_data_list, plot_settings):
     if plot_settings['save_fig']:
 
 
-        save_dir = 'save/{}/figs/several_plots{}/'.format(folder_name, plot_settings['add_save_name'])
+        save_dir = 'save/{}/figs/'.format(folder_name, '')
         save_name = 'delta_vs_generations_all_in_one'
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
@@ -251,9 +253,19 @@ def load_data_from_sims(folder_name, plot_settings):
     sim_plot_data_list = []
     for sim_name in sim_names:
         module_settings = {}
-        mean_log_beta_distance_dict, log_beta_distance_dict, beta_distance_dict, beta_index_max, betas_max_gen_dict, \
-        heat_caps_max_dict, smoothed_heat_caps = calc_heat_cap_param_main(sim_name, module_settings, gaussian_kernel=plot_settings['gaussian_kernel'])
-        delta_dict = mean_log_beta_distance_dict
+
+        mean_log_beta_distance_dict, log_beta_distance_dict,\
+        beta_distance_dict, beta_index_max, betas_max_gen_dict, \
+        heat_caps_max_dict, smoothed_heat_caps = \
+            calc_heat_cap_param_main(sim_name, module_settings,
+                                     gaussian_kernel=plot_settings['gaussian_kernel'])
+
+        delta_dict = {}
+        for k in betas_max_gen_dict.keys():
+            delta_dict[k], _, _ = remove_outliers_mean_std_quantiles(betas_max_gen_dict[k])
+            delta_dict[k] = np.log10(delta_dict[k])
+
+        # delta_dict = mean_log_beta_distance_dict
         delta_list_dict = log_beta_distance_dict
         fitness_last_gen, last_gen = load_fitness_last_gen(sim_name, plot_settings)
 
@@ -270,9 +282,14 @@ def load_data_from_sims(folder_name, plot_settings):
 
 def load_fitness_last_gen(sim_name, plot_settings):
     generation = detect_all_isings(sim_name)[-1]
-    isings_last_gen = load_isings_from_list(sim_name, [generation], decompress=plot_settings['decompress'])[0]
+    isings_last_gen = load_isings_from_list(sim_name, [generation],
+                                            decompress=plot_settings['decompress'], verbose=False)[0]
     isings_last_gen = choose_copied_isings(isings_last_gen)
-    fitness_last_gen = np.mean([I.avg_energy for I in isings_last_gen])
+    # fitness_last_gen = np.mean([I.avg_energy for I in isings_last_gen])
+    fitness_last_gen = np.max([I.avg_energy for I in isings_last_gen])
+    if plot_settings['normalized_fitness']:
+        timesteps = isings_last_gen[0].time_steps
+        fitness_last_gen = 2000 * fitness_last_gen / timesteps
     return fitness_last_gen, generation
 
 
@@ -305,16 +322,16 @@ def gaussian(x, mu, sigma):
     return C * np.exp(-1/2 * (x - mu)**2 / sigma**2)
 
 
-def gaussian_kernel_smoothing(x):
-    '''
-    Convolving with gaussian kernel in order to smoothen noisy heat cap data (before eventually looking for maximum)
-    '''
-
-    # gaussian kernel with sigma=2.25. mu=0 means, that kernel is centered on the data
-    # kernel = gaussian(np.linspace(-3, 3, 15), 0, 2.25)
-    kernel = gaussian(np.linspace(-3, 3, 15), 0, 6)
-    smoothed_x = np.convolve(x, kernel, mode='same')
-    return smoothed_x
+# def gaussian_kernel_smoothing(x):
+#     '''
+#     Convolving with gaussian kernel in order to smoothen noisy heat cap data (before eventually looking for maximum)
+#     '''
+#
+#     # gaussian kernel with sigma=2.25. mu=0 means, that kernel is centered on the data
+#     # kernel = gaussian(np.linspace(-3, 3, 15), 0, 2.25)
+#     kernel = gaussian(np.linspace(-3, 3, 15), 0, 6)
+#     smoothed_x = np.convolve(x, kernel, mode='same')
+#     return smoothed_x
 
 
 def moving_average(interval, window_size):
@@ -378,20 +395,20 @@ if __name__ == '__main__':
     # folder_name = 'sim-20201020-181300_parallel_TEST'
     plot_settings = {}
     # Only plot loads previously saved plotting file instead of loading all simulations to save time
-    plot_settings['only_plot'] = True
+    plot_settings['only_plot'] = False
 
     plot_settings['add_save_name'] = ''
     # plot_settings['only_plot_fittest']
 
-    plot_settings['ylim'] = (-1.8, 1.1)
+    plot_settings['ylim'] = (-4, 2.5)
     # This only plots individuals that have not been mutated in previous generation (thus were fittest in previous generation)
     plot_settings['sliding_window'] = False
     plot_settings['sliding_window_size'] = 10
 
     # smooth works only if plot_settings['interpolate'] = True
     plot_settings['plot_line'] = True
-    plot_settings['smooth'] = True
-    plot_settings['interpolate'] = True
+    plot_settings['smooth'] = False
+    plot_settings['interpolate'] = False
     plot_settings['smooth_window'] = 7  # 21
     plot_settings['line_alpha'] = 1 # normal 0.6
 
@@ -407,13 +424,8 @@ if __name__ == '__main__':
     plot_settings['colors'] = {'b1': 'olive', 'b01': 'maroon', 'b10': 'royalblue'}
 
     beta_inits = [1, 1]
-
-    # folder_names = ['sim-20210302-215811_parallel_beta_linspace_rec_c20_TEST']
-    # folder_names = ['sim-20210118-014339_parallel_beta_linspace_break_eat_rec_c40_30_sims']
-    # folder_names = ['sim-20210118-014339_parallel_beta_linspace_break_eat_rec_c40_30_sims_HEL_ONLY_PLOT']
-    # folder_names = ['sim-20201226-002401_parallel_beta_linspace_rec_c40_30_sims_HEL_ONLY_PLOT']
-    # folder_names = ['sim-20201226-002401_parallel_beta_linspace_rec_c40_30_sims']
-    folder_names = ['sim-20201226-002401_parallel_beta_linspace_rec_c40_30_sims_HEL_ONLY_PLOT', 'sim-20210118-014339_parallel_beta_linspace_break_eat_rec_c40_30_sims_HEL_ONLY_PLOT']
+    plot_settings['normalized_fitness'] = True
+    folder_names = ['sim-20211207-192225_parallel_simpletask_random_time']
 
     plot_settings['our_colors'] = {'lblue': '#8da6cbff', 'iblue': '#5e81b5ff', 'sblue': '#344e73ff',
                                    'lgreen': '#b6d25cff', 'igreen': '#8fb032ff', 'sgreen': '#5e7320ff',

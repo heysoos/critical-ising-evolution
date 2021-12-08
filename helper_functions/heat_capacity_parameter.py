@@ -1,10 +1,12 @@
 import numpy as np
+from scipy.signal import find_peaks
+
 import os
 from helper_functions.automatic_plot_helper import load_settings
 import warnings
 
 
-def calc_heat_cap_param_main(sim_name, module_settings, gen_list=None, gaussian_kernel=True):
+def calc_heat_cap_param_main(sim_name, module_settings, gen_list=None, gaussian_kernel=True, scipy_find_peaks=False, data=None):
     '''
     ---This function calculates the DELTA values aka DYNAMIC REGIME PARAMETER aka heat capacity parameter---
 
@@ -13,18 +15,25 @@ def calc_heat_cap_param_main(sim_name, module_settings, gen_list=None, gaussian_
     for.
     @param module settings: Settings for this heat capacity parameter module. Just pass empty list in case you don't want
     to specify anything
+    @param data: if data is already loaded, don't reload the data
     @return:  Returns mean DYNAMIC REGIME parameter DELTA over generation, dynamic range parameter dynamic range parameter, non-log dynamic range parameter, index of max beta value,
      beta value where heat cap max, heat cap max
      All as dictionaries with the generation being the key
     '''
     module_settings['smoothen_data_gaussian_kernel'] = gaussian_kernel
+    module_settings['scipy_find_peaks'] = scipy_find_peaks
 
     folder = 'save/' + sim_name
     if gen_list is None:
         gen_list = automatic_generation_generation_list(folder + '/C_recorded')
 
-    settings = load_settings(sim_name)
-    C, betas = load_heat_cap_files(sim_name, settings, gen_list)
+    if data is None:
+        settings = load_settings(sim_name)
+        C, betas = load_heat_cap_files(sim_name, settings, gen_list)
+    else:
+        settings = data['settings']
+        C = data['C']
+        betas = data['betas']
     betas_max_gen_dict, heat_caps_max_dict, beta_index_max, smoothed_heat_caps = calc_max(C, betas, gen_list, module_settings, settings)
 
     log_beta_distance_dict, beta_distance_dict = calculate_beta_distance_parameter(betas_max_gen_dict)
@@ -45,16 +54,31 @@ def calc_max(C, betas, gen_list, module_settings, sim_settings):
         heat_caps_max_one_gen = []
         smoothed_heat_caps_one_gen = []
         for i_agent in range(np.shape(C)[1]):
-            heat_caps = np.mean(C[:, i_agent, :, i_gen], axis=0)
+            heat_caps = np.median(C[:, i_agent, :, i_gen], axis=0)
             # Finding the peak
             if not module_settings['smoothen_data_gaussian_kernel']:
                 beta_index_max = np.argmax(heat_caps)
                 heat_cap_max = np.max(heat_caps)
+
+                if module_settings['scipy_find_peaks']:
+                    idxs, props = find_peaks(heat_caps, width=3)
+                    max_peak_idx = idxs[np.argmax(heat_caps[idxs])]
+
+                    beta_index_max = max_peak_idx
+                    heat_cap_max = heat_caps[beta_index_max]
+
                 smoothed_heat_caps = []
             else:
                 smoothed_heat_caps = gaussian_kernel_smoothing(heat_caps, sim_settings, module_settings)
                 beta_index_max = np.argmax(smoothed_heat_caps)
                 heat_cap_max = np.max(smoothed_heat_caps)
+
+                if module_settings['scipy_find_peaks']:
+                    idxs, props = find_peaks(smoothed_heat_caps, width=3)
+                    max_peak_idx = idxs[np.argmax(smoothed_heat_caps[idxs])]
+
+                    beta_index_max = max_peak_idx
+                    heat_cap_max = smoothed_heat_caps[beta_index_max]
             # else:
             #     beta_index_max, _ = find_peaks(heat_caps, height=0) # Find all peaks
             #     beta_index_max = beta_index_max[np.argmax(_['peak_heights'])] # this is the index on the x-axis for the peak
@@ -81,8 +105,10 @@ def gaussian_kernel_smoothing(heat_caps, sim_settings, module_settings):
     R, thermal_time, beta_low, beta_high, beta_num, y_lim_high = sim_settings['heat_capacity_props']
     # gaussian kernel with sigma=2.25. mu=0 means, that kernel is centered on the data
     # kernel = gaussian(np.linspace(-3, 3, 15), 0, 2.25)
-    kernel = gaussian(np.linspace(-3, 3, 15), 0, 5)
-    smoothed_heat_caps = np.convolve(heat_caps, kernel, mode='same')
+    ksize = 3
+    kernel = gaussian(np.linspace(-3, 3, 2*ksize + 1), 0, 1)
+    kernel = kernel / np.sum(kernel)
+    smoothed_heat_caps = np.convolve(heat_caps, kernel)[ksize:-ksize]
     return smoothed_heat_caps
 
 
@@ -114,13 +140,10 @@ def load_heat_cap_files(sim_name, settings, gen_list):
     folder = 'save/' + sim_name
 
     R, thermal_time, beta_low, beta_high, beta_num, y_lim_high = settings['heat_capacity_props']
-    #R = 10
     Nbetas = beta_num
     betas = 10 ** np.linspace(beta_low, beta_high, Nbetas)
     numAgents = settings['pop_size']
     size = settings['size']
-
-
 
     # C[repeat, agent number, index of curr beta value, generation]
     C = np.zeros((R, numAgents, Nbetas, len(gen_list)))
@@ -167,6 +190,27 @@ def RepresentsInt(s):
         return True
     except ValueError:
         return False
+
+def calc_exp_mean_std_quantiles_log(data):
+    '''
+    Calculates the exp( mean/std/quantile( log ( data) ) )
+    '''
+    mean = np.median(np.log10(data))
+    std = np.std(np.log10(data))
+    quantiles = np.quantile(np.log10(data), [0.3, 0.7])
+    return mean, std, quantiles
+
+def remove_outliers_mean_std_quantiles(data):
+    '''
+    Calculate means, std, and quantiles of log(beta_max). Get rid of outliers. Recalculate means/std/quantiles
+    '''
+    mean, std, quantiles = calc_exp_mean_std_quantiles_log(data)
+    distance_from_mean = np.abs(np.log10(data) - mean)
+    max_deviations = 1
+    not_outlier = distance_from_mean < (max_deviations * (std + 1e-6))
+    no_outliers = np.array(data)[not_outlier]
+    mean, std, quantiles = calc_exp_mean_std_quantiles_log(no_outliers)
+    return 10 ** mean, 10 ** std, 10 ** quantiles
 
 
 if __name__ == '__main__':

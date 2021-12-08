@@ -1,4 +1,5 @@
 import numpy as np
+from helper_functions.utils import compressed_pickle
 
 class nes:
     def __init__(self, POP=50, SIGMA=0.5, CHUNK_SIZE=10,
@@ -150,6 +151,9 @@ class nes:
                                                        rewards).T  # solutions with high rewards dominate the update
         coeffs = coeffs + reward_weighted_noise
 
+        self.coeffs = coeffs
+        self.reward_grad = reward_weighted_noise
+
         if self.ANNEALING:
             if self.LEARNING_RATE > 0.001:
                 self.LEARNING_RATE *= self.DECAY
@@ -179,3 +183,10 @@ class nes:
                 a.J[ix[j], iy[j]] = new_conn[j]
 
         return agents
+
+    def save_nes(self, folder, nes, gen):
+
+        filename = folder + 'nes_logs/gen[' + str(gen) + ']-isings.pickle'
+
+        compressed_pickle(filename, nes)
+

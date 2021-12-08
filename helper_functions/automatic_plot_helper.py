@@ -16,7 +16,7 @@ import matplotlib.colors as colors_package
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 from matplotlib.legend_handler import HandlerBase
-
+from tqdm import tqdm
 '''
 This is a library with useful functions to load ising objects and extract information from them.
 '''
@@ -227,7 +227,7 @@ def load_top_isings_attr(loadfile, first_n_isings, attr, wait_for_memory = False
     return isings_attr_list
 
 
-def load_isings_specific_path(isings_path, decompress=False):
+def load_isings_specific_path(isings_path, decompress=False, verbose=True):
     '''
     Load all isings pickle files from a specific isings folder (when they are not normally stored and return them as list
     :param isings_path : specific path to folder that ising objects are saved in
@@ -236,11 +236,12 @@ def load_isings_specific_path(isings_path, decompress=False):
     iter_list = detect_all_isings_specific_path(isings_path, decompress)
 
     isings_list = []
-    for ii, iter in enumerate(iter_list):
+    for ii, iter in tqdm(enumerate(iter_list)):
 
         filename = isings_path + '/gen[' + str(iter) + ']-isings.pickle'
         startstr = 'Loading simulation:' + filename
-        print(startstr)
+        if verbose:
+            print(startstr)
 
         try:
             if decompress:
@@ -333,7 +334,7 @@ def detect_all_isings_compressed_specific_path(isings_path):
     return gen_nums
 
 
-def load_isings_from_list(loadfile, iter_list, wait_for_memory = False, decompress=False):
+def load_isings_from_list(loadfile, iter_list, wait_for_memory = False, decompress=False, verbose=True):
     '''
     Load isings pickle files specified in iter_list and return them as list
     :param loadfile : simulation name
@@ -345,11 +346,13 @@ def load_isings_from_list(loadfile, iter_list, wait_for_memory = False, decompre
     settings = load_settings(loadfile)
     numAgents = settings['pop_size']
     isings_list = []
-    for ii, iter in enumerate(iter_list):
+    for ii, iter in tqdm(enumerate(iter_list)):
 
         filename = 'save/' + loadfile + '/isings/gen[' + str(iter) + ']-isings.pickle'
         startstr = 'Loading simulation:' + filename
-        print(startstr)
+
+        if verbose:
+            print(startstr)
 
         try:
             if decompress:
@@ -362,7 +365,6 @@ def load_isings_from_list(loadfile, iter_list, wait_for_memory = False, decompre
             print("Error while loading %s. Skipped file" % filename)
             # Leads to the previous datapoint being drawn twice!!
 
-        isings_list.append(isings)
         isings_list.append(isings)
     return isings_list
 

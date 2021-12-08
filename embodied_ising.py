@@ -1,4 +1,5 @@
 import compute_and_plot_heat_capacity_automatic
+from nes import nes
 
 from embodied_ising_helper import animate
 import numpy as np
@@ -14,11 +15,8 @@ from math import atan2
 from math import cos
 from math import degrees
 from math import radians
-from random import random
-from random import sample
 from math import sin
 from math import sqrt
-from random import uniform
 from copy import deepcopy
 import multiprocessing as mp
 import sys
@@ -30,12 +28,10 @@ from numba import jit
 
 from os import listdir
 from os.path import isfile, join
-#import random
-#from tqdm import tqdm
-#from pympler import tracker
+
 import visualize_in_model_natural_heat_capacity
 import ray
-import gzip
+from helper_functions.utils import compressed_pickle
 
 from embodied_ising_helper.speciation import speciation
 from embodied_ising_helper.speciation import calculate_shared_fitness
@@ -207,8 +203,8 @@ class ising:
 
     def randomize_position(self, settings):
 
-        self.xpos = uniform(settings['x_min'], settings['x_max'])  # position (x)
-        self.ypos = uniform(settings['y_min'], settings['y_max'])  # position (y)
+        self.xpos = np.random.uniform(settings['x_min'], settings['x_max'])  # position (x)
+        self.ypos = np.random.uniform(settings['y_min'], settings['y_max'])  # position (y)
 
         if settings['BoidOn']:
             self.v = (np.random.randn(2) * 2 - 1) * settings['v_max']
@@ -602,8 +598,8 @@ class ising:
         # includes: #self.s = np.random.randint(0, 2, self.size) * 2 - 1
 
         # randomize position (not using self.randomize_position function since it also randomizes velocity)
-        self.xpos = uniform(settings['x_min'], settings['x_max'])  # position (x)
-        self.ypos = uniform(settings['y_min'], settings['y_max'])  # position (y)
+        self.xpos = np.random.uniform(settings['x_min'], settings['x_max'])  # position (x)
+        self.ypos = np.random.uniform(settings['y_min'], settings['y_max'])  # position (y)
 
         self.dv = 0
         self.v = 0
@@ -697,13 +693,13 @@ def SequentialGlauberStepFast(thermalTime, s, h, J, Beta, Ssize, size):
 
 class food():
     def __init__(self, settings):
-        self.xpos = uniform(settings['x_min'], settings['x_max'])
-        self.ypos = uniform(settings['y_min'], settings['y_max'])
+        self.xpos = np.random.uniform(settings['x_min'], settings['x_max'])
+        self.ypos = np.random.uniform(settings['y_min'], settings['y_max'])
         self.energy = settings['food_energy']
 
     def respawn(self, settings):
-        self.xpos = uniform(settings['x_min'], settings['x_max'])
-        self.ypos = uniform(settings['y_min'], settings['y_max'])
+        self.xpos = np.random.uniform(settings['x_min'], settings['x_max'])
+        self.ypos = np.random.uniform(settings['y_min'], settings['y_max'])
         self.energy = settings['food_energy']
 
 # ------------------------------------------------------------------------------+
@@ -789,6 +785,7 @@ def pdistance_pairwise(x0, x1, dimensions, food=False):
         dist_mat = np.zeros((N1, N2))
     theta_mat = np.zeros((N1, N2))
 
+
     for ii, ind in enumerate(combo_index):
         i = ind[0]
         j = ind[1]
@@ -842,6 +839,46 @@ def extract_plot_information(isings, foods, settings):
     for f in foods:
         foods_info.append([f.xpos, f.ypos])
     return isings_info, foods_info
+
+
+def NESTimeEvolve(isings, foods, settings, folder, rep):
+    [ising.reset_state(settings) for ising in isings]
+
+    T = settings['TimeSteps']
+
+    for I in isings:
+        I.position = np.zeros((2, T))
+
+    # Main simulation loop:
+    if settings['plot'] == True:
+        fig, ax = plt.subplots()
+        # fig.set_size_inches(15, 10)
+        isings_all_timesteps = []
+        foods_all_timesteps = []
+
+
+    for t in range(T):
+
+        # PLOT SIMULATION FRAME
+        if settings['plot'] and (t % settings['frameRate']) == 0:
+            isings_info, foods_info = extract_plot_information(isings, foods, settings)
+            isings_all_timesteps.append(isings_info)
+            foods_all_timesteps.append(foods_info)
+
+        interact(settings, isings, foods)
+
+        if settings['parallel_computing']:
+            # parallelizedSequGlauberSteps(isings, settings)
+            # ray.init(num_cpus=settings['cores'])
+            if not ray.is_initialized():
+                ray.init()
+            ray_funcs = [ray_parallel_Glauber_steps.remote(I, settings) for I in isings]
+            isings = ray.get(ray_funcs)
+        else:
+            [I.SequentialGlauberStepFastHelper(settings) for I in isings]
+
+    if settings['plot']:
+        animate.animate_plot_Func(isings_all_timesteps, foods_all_timesteps, settings, ax, fig, rep, t, folder)
 
 
 
@@ -1206,6 +1243,14 @@ def EvolutionLearning(isings, foods, settings, Iterations = 1):
         except Exception:
             print('Could not create backup copy of code')
 
+    if settings['NES']:
+        NES = nes(POP=len(isings), ELITISM=settings['NES_elitism'], MUTATION_RATE=settings['NES_mutation_rate'],
+                  ANNEALING=settings['NES_anneal'], CLIP=settings['NES_clip'])
+        if settings['LoadIsings']:
+            coeffs, noise_population, try_coeffs = NES.loadIsingNES(isings)
+        else:
+            coeffs, noise_population, try_coeffs = NES.initIsingNES(isings, settings['init_beta'])
+
     total_timesteps = 0 #  Total amount of time steps, needed for bacterial seasons
     if settings['seasons']:
         handle_total_timesteps(folder, settings, 0)
@@ -1309,8 +1354,12 @@ def EvolutionLearning(isings, foods, settings, Iterations = 1):
                 fit_func_param_name = 'eat_rate'
 
             if settings['mutateB']:
-                print('\n', count, '|', fit_func_param_name, eat_rate, 'mean_Beta', mBeta,
-                      'std_Beta', stdBeta, 'min_Beta', minBeta, 'max_Beta', maxBeta)
+                betas = [I.Beta for I in isings]
+                fitnesses = [I.avg_energy for I in isings]
+                print(
+                    f'{count} | Fitness(mean/min/max): {np.mean(fitnesses):.2f}|{np.min(fitnesses):.2f}|{np.max(fitnesses):.2f}, '
+                    f'Beta(mean/min/max): {np.mean(betas):.2f}|{np.min(betas):.2f}|{np.max(betas):.2f}')
+
             else:
                 print('\n', count, '|', 'Avg_fitness', eat_rate)
 
@@ -1393,13 +1442,17 @@ def EvolutionLearning(isings, foods, settings, Iterations = 1):
                     if settings['isolated_populations']:
                         isings = evolve_isolated_populations(isings, 'avg_energy', rep, settings)
                     else:
-                        isings = evolve(settings, isings, rep)
+                        if settings['NES']:
+                            fitnesses = [I.avg_energy for I in isings]
+                            isings, noise_population, try_coeffs = nes_evolve(NES, isings, noise_population, try_coeffs,
+                                                                          fitnesses)
+                        else:
+                            isings = evolve(settings, isings, rep)
 
 
         #### PLOTTING PIPELINE ####
         plotting_pipeline(rep, sim_name, settings)
         #Refreshing of plots
-
 
 
         #tr.print_diff()
@@ -1714,8 +1767,8 @@ def evolve(settings, I_old, gen, pop_size=None, numKill=None):
         '''
         Fittest 10 agents copied 15 times and mutates them for a probability of 0.1, they make position 20 to 34 in I_new (counted from 0)
         '''
-        candidateDup = range(0, elitism_num)
-        random_index = sample(candidateDup, 1)[0] # random int between 0 and 10
+        # candidateDup = range(0, elitism_num)
+        random_index = np.random.randint(elitism_num) # sample(candidateDup, 1)[0] # random int between 0 and 10
 
         name = copy.deepcopy(I_sorted[random_index].name) + 'm'
         I_new.append(ising(settings, size, nSensors, nMotors, name))
@@ -1754,7 +1807,7 @@ def evolve(settings, I_old, gen, pop_size=None, numKill=None):
         # TODO: negative weight mutations?!
         # SELECTION (TRUNCATION SELECTION)
         candidatesMate = range(0, len(I_new)) # range(0, alive_num) to avoid double dipping : range(0,35)
-        random_index = sample(candidatesMate, 2)
+        random_index = np.random.choice(candidatesMate, 2)
         org_1 = I_sorted[random_index[0]]
         org_2 = I_sorted[random_index[1]]
 
@@ -1765,7 +1818,7 @@ def evolve(settings, I_old, gen, pop_size=None, numKill=None):
         # load up a dummy maskJ which gets updated
         maskJ_new = np.zeros((size, size), dtype=bool)
 
-        crossover_weight = random()
+        crossover_weight = np.random.rand () #random()
 
         # CROSS/MUTATE TEMPERATURE
         if settings['mutateB']:
@@ -1779,13 +1832,13 @@ def evolve(settings, I_old, gen, pop_size=None, numKill=None):
 
         # CROSS WEIGHTS
         for iJ in range(0, size):
-            crossover_weight = random()
+            crossover_weight = np.random.rand()
 
             h_new[iJ] = (crossover_weight * org_1.h[iJ]) + \
                         ((1 - crossover_weight) * org_2.h[iJ])
 
             for jJ in range(iJ + 1, size):
-                crossover_weight = random()
+                crossover_weight = np.random.rand()
 
                 # check if these hidden neurons are disconnected to begin with
                 if org_1.maskJ[iJ, jJ] != 0 and org_2.maskJ[iJ, jJ] != 0:
@@ -1869,7 +1922,7 @@ def evolve2(settings, I_old, gen):
         Fittest 10 agents copied 15 times and mutates them for a probability of 0.1, they make position 20 to 34 in I_new (counted from 0)
         '''
         candidateDup = range(0, elitism_num)
-        random_index = sample(candidateDup, 1)[0] # random int between 0 and 10
+        random_index = np.random.randint(elitism_num) #sample(candidateDup, 1)[0] # random int between 0 and 10
 
         name = copy.deepcopy(I_sorted[random_index].name) + 'm'
         I_new.append(ising(settings, size, nSensors, nMotors, name))
@@ -1908,7 +1961,7 @@ def evolve2(settings, I_old, gen):
         # TODO: negative weight mutations?!
         # SELECTION (TRUNCATION SELECTION)
         candidatesMate = range(0, len(I_new)) # range(0, alive_num) to avoid double dipping : range(0,35)
-        random_index = sample(candidatesMate, 2)
+        random_index = np.random.choice(candidatesMate, 2) # sample(candidatesMate, 2)
         org_1 = I_sorted[random_index[0]]
         org_2 = I_sorted[random_index[1]]
 
@@ -1919,7 +1972,7 @@ def evolve2(settings, I_old, gen):
         # load up a dummy maskJ which gets updated
         maskJ_new = np.zeros((size, size), dtype=bool)
 
-        crossover_weight = random()
+        crossover_weight =np.random.rand()
 
         # CROSS/MUTATE TEMPERATURE
         if settings['mutateB']:
@@ -1933,13 +1986,13 @@ def evolve2(settings, I_old, gen):
 
         # CROSS WEIGHTS
         for iJ in range(0, size):
-            crossover_weight = random()
+            crossover_weight = np.random.rand()
 
             h_new[iJ] = (crossover_weight * org_1.h[iJ]) + \
                         ((1 - crossover_weight) * org_2.h[iJ])
 
             for jJ in range(iJ + 1, size):
-                crossover_weight = random()
+                crossover_weight = np.random.rand()
 
                 # check if these hidden neurons are disconnected to begin with
                 if org_1.maskJ[iJ, jJ] != 0 and org_2.maskJ[iJ, jJ] != 0:
@@ -2050,11 +2103,6 @@ def save_sim(settings, folder, isings, fitness_stat, mutationrate, fitC, fitm, g
         pickle_out = open(filenameI, 'wb')
         pickle.dump(isings, pickle_out)
         pickle_out.close()
-
-
-def compressed_pickle(title, data):
-    with gzip.GzipFile(title + '.pgz', 'w') as f:
-        pickle.dump(data, f)
 
 
 def sigmoid(x):
@@ -2175,6 +2223,37 @@ def interact(settings, isings, foods):
 
         #I.org_sens = org_sensor[i]
 
+def nes_evolve(NES, I_old, noise_population, try_coeffs, fitnesses):
+    '''
+    Use a natural evolution strategy to calcualte gradients for the parameters of the ising model.
+    The most fit agent is selected and gathers all the cumulated gradients from the population.
+
+    NES vars:
+    try_coeffs - set of coefficients currently being used by the population
+    noise_population - gaussian noise that was used to generate try_coeffs (used to calculate gradients)
+    '''
+
+    fit_idx = np.argmax(fitnesses)
+    coeffs = try_coeffs[fit_idx]  # take best coefficients
+    noise_population = noise_population - noise_population[fit_idx]  # zero noise on new best coeffs
+    coeffs = NES.update_coeffs(fitnesses, noise_population, coeffs)  # add gradient (reward weighted noise)
+
+    if NES.elitism:
+        elite_coeffs = [try_coeffs[idx] for idx in np.argsort(fitnesses)[::-1][:NES.num_elite]]
+
+    noise_population = NES.get_noise_population(len(coeffs))  # get new noise
+    try_coeffs = NES.make_solutions(coeffs, noise_population)  # make new coeffs to try
+    if NES.CLIP is not None:
+        noise_population = np.array(try_coeffs) - np.array(coeffs)  # since try_coeffs is clipped, get the post-clipped noise vectors
+
+    if NES.elitism:
+        for idx, c in enumerate(elite_coeffs):
+            try_coeffs[idx] = c
+            noise_population[idx] = c - coeffs
+
+    I_new = NES.set_solutions(I_old, try_coeffs)  # set new coeffs
+
+    return I_new, noise_population, try_coeffs
 
 
 
